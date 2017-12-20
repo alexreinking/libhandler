@@ -11,7 +11,7 @@
 /*-----------------------------------------------------------------
   Define operations
 -----------------------------------------------------------------*/
-LH_DEFINE_EFFECT1(amb, flip)
+LH_DEFINE_EFFECT(amb, flip)
 LH_DEFINE_OP0(amb, flip, bool)
 
 

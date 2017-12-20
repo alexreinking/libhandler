@@ -7,7 +7,7 @@ found in the file "license.txt" at the root of this distribution.
 #include "libhandler.h"
 #include "tests.h"
 
-LH_DEFINE_EFFECT1(N, sum2)
+LH_DEFINE_EFFECT(N, sum2)
 
 long N_sum2(long x, long y) {
   return lh_long_value(lh_yieldN(LH_OPTAG(N, sum2), 2, lh_value_long(x), lh_value_long(y)));

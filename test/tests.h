@@ -42,8 +42,8 @@ void trace_printf(const char* fmt, ...);
 /*-----------------------------------------------------------------
   Exn
 -----------------------------------------------------------------*/
-LH_DECLARE_EFFECT1(exn, raise)
-LH_DECLARE_VOIDOP1(exn, raise, lh_string)
+LH_DECLARE_EFFECT(exn, raise)
+LH_DECLARE_OP(exn, raise, void, lh_string)
 
 void test_exn();
 lh_value id(lh_value);
@@ -52,9 +52,9 @@ lh_value id_raise(lh_value);
 /*-----------------------------------------------------------------
   State
 -----------------------------------------------------------------*/
-LH_DECLARE_EFFECT2(state, get, put)
-LH_DECLARE_OP0(state, get, int)
-LH_DECLARE_VOIDOP1(state, put, int)
+LH_DECLARE_EFFECT(state, get, put)
+LH_DECLARE_OP(state, get, int)
+LH_DECLARE_OP(state, put, void, int)
 
 lh_value state_counter(lh_value arg);
 void test_state();
@@ -62,8 +62,8 @@ void test_state();
 /*-----------------------------------------------------------------
   Amb
 -----------------------------------------------------------------*/
-LH_DECLARE_EFFECT1(amb, flip)
-LH_DECLARE_OP0(amb, flip, bool)
+LH_DECLARE_EFFECT(amb, flip)
+LH_DECLARE_OP(amb, flip, bool)
 
 
 void test_amb();

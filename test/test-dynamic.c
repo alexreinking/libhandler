@@ -15,8 +15,8 @@ found in the file "license.txt" at the root of this distribution.
 # define lh_alloca alloca
 #endif
 
-LH_DEFINE_EFFECT1(A,showA)
-LH_DEFINE_EFFECT1(B,showB)
+LH_DEFINE_EFFECT(A,showA)
+LH_DEFINE_EFFECT(B,showB)
 LH_DEFINE_OP1(A, showA, long, bool)
 LH_DEFINE_OP0(B, showB, long)
 

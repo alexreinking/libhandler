@@ -10,7 +10,7 @@ found in the file "license.txt" at the root of this distribution.
 #include <string>
 #include <iostream>
 
-LH_DEFINE_EFFECT1(a,foo)
+LH_DEFINE_EFFECT(a,foo)
 LH_DEFINE_OP0(a,foo,int)
 
 // test raising an exception that is caught over a fragment handler

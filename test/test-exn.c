@@ -11,7 +11,7 @@ found in the file "license.txt" at the root of this distribution.
 /*-----------------------------------------------------------------
   Define operations
 -----------------------------------------------------------------*/
-LH_DEFINE_EFFECT1(exn, raise)
+LH_DEFINE_EFFECT(exn, raise)
 LH_DEFINE_VOIDOP1(exn, raise, lh_string)
 
 

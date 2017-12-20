@@ -7,3 +7,4 @@ config/hasgot.?
 config/tst.exe
 config/tst
 out/
+/.vs

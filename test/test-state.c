@@ -11,7 +11,7 @@ found in the file "license.txt" at the root of this distribution.
 /*-----------------------------------------------------------------
   Define operations
 -----------------------------------------------------------------*/
-LH_DEFINE_EFFECT2(state, get, put)
+LH_DEFINE_EFFECT(state, get, put)
 
 LH_DEFINE_OP0(state, get, int)
 LH_DEFINE_VOIDOP1(state, put, int)

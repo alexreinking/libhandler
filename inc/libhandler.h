@@ -249,57 +249,78 @@ const char* lh_effect_name(lh_effect effect);
   Operation definition helpers
 -----------------------------------------------------------------*/
 
+// MSVC workarounds
+#define LH_CONCAT1(x, y) x ## y
+#define LH_CONCAT(x, y) LH_CONCAT1(x, y)
+#define LH_EXPAND(x) x
+
+// Count up to 8 arguments
+#define LH_ARGPACK(...) (dummy, ##__VA_ARGS__, 8, 7, 6, 5, 4, 3, 2, 1, 0)
+#define LH_NARGS1(a1, a2, a3, a4, a5, a6, a7, a8, a9, a10, ...) a10
+#define LH_NARGS(...) LH_EXPAND(LH_NARGS1 LH_EXPAND(LH_ARGPACK(__VA_ARGS__)))
+
+// Apply macro up to 8 times
+#define LH_FOREACH2(f, z, n, ...) LH_CONCAT(LH_APPLY, n)LH_EXPAND((f, z, ##__VA_ARGS__))
+#define LH_FOREACH1(f, z, n, ...) LH_FOREACH2(f, z, n, ##__VA_ARGS__)
+#define LH_FOREACH(f, z, ...) LH_EXPAND(LH_FOREACH1(f, z, LH_NARGS(__VA_ARGS__), ##__VA_ARGS__))
+#define LH_APPLY0(...)
+#define LH_APPLY1(f, z, x0) f(z, 0, x0)
+#define LH_APPLY2(f, z, x0, x1) f(z, 0, x0) f(z, 1, x1)
+#define LH_APPLY3(f, z, x0, x1, x2) f(z, 0, x0) f(z, 1, x1) f(z, 2, x2)
+#define LH_APPLY4(f, z, x0, x1, x2, x3) f(z, 0, x0) f(z, 1, x1) f(z, 2, x2) f(z, 3, x3)
+#define LH_APPLY5(f, z, x0, x1, x2, x3, x4) f(z, 0, x0) f(z, 1, x1) f(z, 2, x2) f(z, 3, x3) f(z, 4, x4)
+#define LH_APPLY6(f, z, x0, x1, x2, x3, x4, x5) f(z, 0, x0) f(z, 1, x1) f(z, 2, x2) f(z, 3, x3) f(z, 4, x4) f(z, 5, x5)
+#define LH_APPLY7(f, z, x0, x1, x2, x3, x4, x5, x6) f(z, 0, x0) f(z, 1, x1) f(z, 2, x2) f(z, 3, x3) f(z, 4, x4) f(z, 5, x5) f(z, 6, x6)
+#define LH_APPLY8(f, z, x0, x1, x2, x3, x4, x5, x6, x7) f(z, 0, x0) f(z, 1, x1) f(z, 2, x2) f(z, 3, x3) f(z, 4, x4) f(z, 5, x5) f(z, 6, x6) f(z, 7, x7)
+
+#define LH_LFOREACH2(f, z, n, ...) LH_CONCAT(LH_LAPPLY, n)LH_EXPAND((f, z, ##__VA_ARGS__))
+#define LH_LFOREACH1(f, z, n, ...) LH_LFOREACH2(f, z, n, ##__VA_ARGS__)
+#define LH_LFOREACH(f, z, ...) LH_EXPAND(LH_LFOREACH1(f, z, LH_NARGS(__VA_ARGS__), ##__VA_ARGS__))
+#define LH_LAPPLY0(...)
+#define LH_LAPPLY1(f, z, x0) f(z, 0, x0)
+#define LH_LAPPLY2(f, z, x0, x1) f(z, 0, x0), f(z, 1, x1)
+#define LH_LAPPLY3(f, z, x0, x1, x2) f(z, 0, x0), f(z, 1, x1), f(z, 2, x2)
+#define LH_LAPPLY4(f, z, x0, x1, x2, x3) f(z, 0, x0), f(z, 1, x1), f(z, 2, x2), f(z, 3, x3)
+#define LH_LAPPLY5(f, z, x0, x1, x2, x3, x4) f(z, 0, x0), f(z, 1, x1), f(z, 2, x2), f(z, 3, x3), f(z, 4, x4)
+#define LH_LAPPLY6(f, z, x0, x1, x2, x3, x4, x5) f(z, 0, x0), f(z, 1, x1), f(z, 2, x2), f(z, 3, x3), f(z, 4, x4), f(z, 5, x5)
+#define LH_LAPPLY7(f, z, x0, x1, x2, x3, x4, x5, x6) f(z, 0, x0), f(z, 1, x1), f(z, 2, x2), f(z, 3, x3), f(z, 4, x4), f(z, 5, x5), f(z, 6, x6)
+#define LH_LAPPLY8(f, z, x0, x1, x2, x3, x4, x5, x6, x7) f(z, 0, x0), f(z, 1, x1), f(z, 2, x2), f(z, 3, x3), f(z, 4, x4), f(z, 5, x5), f(z, 6, x6), f(z, 7, x7)
+
+// Common libhandler naming macros
 #define LH_EFFECT(effect)         lh_names_effect_##effect
 #define LH_OPTAG_DEF(effect,op)   lh_op_##effect##_##op
 #define LH_OPTAG(effect,op)       &LH_OPTAG_DEF(effect,op)
 
-#define LH_DECLARE_EFFECT0(effect)  \
-  extern const char* LH_EFFECT(effect)[2];
+// Declare libhandler effect
+#define LH_DECLARE_EFFECT(effect, ...) \
+	extern const char* LH_EFFECT(effect)[2 + LH_NARGS(__VA_ARGS__)]; 
 
-#define LH_DECLARE_EFFECT1(effect,op1)  \
-  extern const char* LH_EFFECT(effect)[3];
+// Define libhandler effect
+#define LH_OP_NAME(effect, i, x) #effect "/" #x,
+#define LH_OP_NAMES(effect, ...) LH_FOREACH(LH_OP_NAME, effect, ##__VA_ARGS__)
 
-#define LH_DECLARE_EFFECT2(effect,op1,op2)  \
-  extern const char* LH_EFFECT(effect)[4];
+#define LH_OP_STRUCT(effect, i, op) \
+  const struct lh_optag_ LH_OPTAG_DEF(effect, op) = { LH_EFFECT(effect), i };
+#define LH_OP_STRUCTS(effect, ...) LH_FOREACH(LH_OP_STRUCT, effect, ##__VA_ARGS__)
 
-#define LH_DECLARE_OP(effect,op) \
+#define LH_DEFINE_EFFECT(effect, ...) \
+  const char* LH_EFFECT(effect)[2 + LH_NARGS(__VA_ARGS__)] = { #effect, LH_OP_NAMES(effect, ##__VA_ARGS__) NULL }; \
+  LH_OP_STRUCTS(effect, ##__VA_ARGS__)
+
+// Declare libhandler operator
+#define LH_DECLARE_OP_STRUCT(effect,op) \
   extern const struct lh_optag_ lh_op_##effect##_##op;
 
-#define LH_DECLARE_OP0(effect,op,restype) \
-  LH_DECLARE_OP(effect,op) \
-  restype effect##_##op();
+#define LH_ARGNAME(_, i, type) type arg##i
 
-#define LH_DECLARE_OP1(effect,op,restype,argtype) \
-  LH_DECLARE_OP(effect,op) \
-  restype effect##_##op(argtype arg);
+#define LH_DECLARE_OP(effect, op, restype, ...) \
+  LH_DECLARE_OP_STRUCT(effect, op) \
+  restype effect##_##op(LH_LFOREACH(LH_ARGNAME, "", ##__VA_ARGS__));
 
-#define LH_DECLARE_VOIDOP0(effect,op) \
-  LH_DECLARE_OP(effect,op) \
-  void effect##_##op();
+// Define libhandler operator
+#define LH_DEFINE_OP0(effect,op,restype) restype effect##_##op() { lh_value res = lh_yield(LH_OPTAG(effect,op), lh_value_null); return lh_##restype##_value(res); } 
 
-#define LH_DECLARE_VOIDOP1(effect,op,argtype) \
-  LH_DECLARE_OP(effect,op) \
-  void effect##_##op(argtype arg);
-
-
-#define LH_DEFINE_EFFECT0(effect) \
-  const char* LH_EFFECT(effect)[2] = { #effect, NULL }; 
-
-#define LH_DEFINE_EFFECT1(effect,op1) \
-  const char* LH_EFFECT(effect)[3] = { #effect, #effect "/" #op1, NULL }; \
-  const struct lh_optag_ LH_OPTAG_DEF(effect,op1) = { LH_EFFECT(effect), 0 }; 
-
-#define LH_DEFINE_EFFECT2(effect,op1,op2) \
-  const char* LH_EFFECT(effect)[4] = {  #effect, #effect "/" #op1, #effect "/" #op2, NULL }; \
-  const struct lh_optag_ LH_OPTAG_DEF(effect,op1) = { LH_EFFECT(effect), 0 }; \
-  const struct lh_optag_ LH_OPTAG_DEF(effect,op2) = { LH_EFFECT(effect), 1 }; 
-
-
-#define LH_DEFINE_OP0(effect,op,restype) \
-  restype effect##_##op() { lh_value res = lh_yield(LH_OPTAG(effect,op), lh_value_null); return lh_##restype##_value(res); } 
-
-#define LH_DEFINE_OP1(effect,op,restype,argtype) \
-  restype effect##_##op(argtype arg) { lh_value res = lh_yield(LH_OPTAG(effect,op), lh_value_##argtype(arg)); return lh_##restype##_value(res); }
+#define LH_DEFINE_OP1(effect,op,restype,argtype) restype effect##_##op(argtype arg) { lh_value res = lh_yield(LH_OPTAG(effect,op), lh_value_##argtype(arg)); return lh_##restype##_value(res); }
 
 #define LH_DEFINE_VOIDOP0(effect,op) \
   void effect##_##op() { lh_yield(LH_OPTAG(effect,op), lh_value_null); } 
@@ -307,6 +328,7 @@ const char* lh_effect_name(lh_effect effect);
 #define LH_DEFINE_VOIDOP1(effect,op,argtype) \
   void effect##_##op(argtype arg) { lh_yield(LH_OPTAG(effect,op), lh_value_##argtype(arg)); } 
 
+// Wrap functions
 #define LH_WRAP_FUN0(fun,restype) \
   lh_value wrap_##fun(lh_value arg) { (void)(arg); return lh_value_##restype(fun()); }
 

@@ -12,7 +12,7 @@ found in the file "license.txt" at the root of this distribution.
 /*-----------------------------------------------------------------
   A tail resume handler that raises an exception
 -----------------------------------------------------------------*/
-LH_DEFINE_EFFECT1(tr, raise)
+LH_DEFINE_EFFECT(tr, raise)
 LH_DEFINE_OP1(tr, raise, long, long)
 
 static lh_value _tr_raise(lh_resume r, lh_value local, lh_value arg) {
