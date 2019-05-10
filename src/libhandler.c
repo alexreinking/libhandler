@@ -43,6 +43,7 @@
 #endif
 
 #include "libhandler.h"
+#include "libhandler-internal.h"
 #include "cenv.h"     // configure generated
 
 #include <stddef.h>   // ptrdiff_t
@@ -293,8 +294,16 @@ __thread hstack __hstack = { NULL, 0, 0, NULL };
 /*-----------------------------------------------------------------
   Fatal errors
 -----------------------------------------------------------------*/
-
 static lh_fatalfun* onfatal = NULL;
+
+void lh_debug_wait_for_enter() {
+#if !defined(NDEBUG) && !defined(LH_IN_ENCLAVE)
+	char buf[128];
+	buf[127] = 0;
+	fprintf(stderr,"(press enter to continue)\n");
+  if (fgets(buf, 127, stdin) == NULL) { /* error */ };
+#endif
+}
 
 static void fatal(int err, const char* msg, ...) {
   va_list args;
@@ -306,11 +315,16 @@ static void fatal(int err, const char* msg, ...) {
     onfatal(err,buf);
   }
   else {
+#ifdef LH_IN_ENCLAVE
+    *((int*)(NULL)) = 0; // abort by crash?!?
+#else
     fflush(stdout);
     fputs("libhandler: fatal error: ", stderr);
     fputs(buf, stderr);
     fputs("\n", stderr);
+    lh_debug_wait_for_enter();
     exit(1);
+#endif
   }
 }
 
@@ -321,11 +335,13 @@ void lh_register_onfatal(lh_fatalfun* _onfatal) {
 
 // Set up different allocation functions
 static lh_mallocfun* custom_malloc = NULL;
+static lh_callocfun* custom_calloc = NULL;
 static lh_reallocfun* custom_realloc = NULL;
 static lh_freefun* custom_free = NULL;
 
-void lh_register_malloc(lh_mallocfun* _malloc, lh_reallocfun* _realloc, lh_freefun* _free) {
+void lh_register_malloc(lh_mallocfun* _malloc, lh_callocfun* _calloc, lh_reallocfun* _realloc, lh_freefun* _free) {
   custom_malloc = _malloc;
+  custom_calloc = _calloc;
   custom_realloc = _realloc;
   custom_free = _free;
 }
@@ -343,25 +359,58 @@ void lh_register_malloc(lh_mallocfun* _malloc, lh_reallocfun* _realloc, lh_freef
 static void* checked_malloc(size_t size) {
   //assert((ptrdiff_t)(size) > 0); // check for overflow or negative sizes
   if ((ptrdiff_t)(size) <= 0) fatal(EINVAL, "invalid memory allocation size: %lu", (unsigned long)size );
-  void* p = (custom_malloc==NULL ? malloc(size) : custom_malloc(size));
+  void* p = lh_malloc(size);
   if (p == NULL) fatal(ENOMEM, "out of memory");
   return p;
 }
 static void* checked_realloc(void* p, size_t size) {
   //assert((ptrdiff_t)(size) > 0); // check for overflow or negative sizes
   if ((ptrdiff_t)(size) <= 0) fatal(EINVAL, "invalid memory re-allocation size: %lu", (unsigned long)size);
-  void* q = (custom_realloc==NULL ? realloc(p,size) : custom_realloc(p,size));
+  void* q = lh_realloc(p, size);
   if (q == NULL) fatal(ENOMEM, "out of memory");
   return q;
 }
 static void checked_free(void* p) {
+  lh_free(p);
+}
+#endif
+
+void* lh_malloc(size_t size) {
+  return (custom_malloc == NULL ? malloc(size) : custom_malloc(size));  
+}
+void* lh_calloc(size_t n, size_t size) {
+  return (custom_calloc == NULL ? calloc(n,size) : custom_calloc(n,size));
+}
+void* lh_realloc(void* p, size_t size) {
+  return (custom_realloc == NULL ? realloc(p, size) : custom_realloc(p, size));  
+}
+void lh_free(void* p) {
+  assert(p != NULL);
   if (p == NULL) return;
   if (custom_free == NULL) free(p);
   else custom_free(p);
 }
-#endif
+static char* _lh_strndup(const char* s, size_t max) {
+  size_t n = (max == SIZE_MAX ? max : max + 1);
+  char* t = (char*)lh_malloc(n * sizeof(char));
+  #ifdef _MSC_VER
+  strncpy_s(t, n, s, max);
+  #else
+  strncpy(t, s, max);
+  #endif
+  t[max] = 0;
+  return t;
+}
 
-
+char* lh_strdup(const char* s) {
+  if (s == NULL) return NULL;
+  size_t n = strlen(s);
+  return  _lh_strndup(s, n);
+}
+char* lh_strndup(const char* s, size_t max) {
+  if (s == NULL) return NULL;
+  return _lh_strndup(s, max);
+}
 
 /*-----------------------------------------------------------------
   Stack helpers; these abstract over the direction the C stack grows.
@@ -489,6 +538,11 @@ static struct {
     0, 0, 
 };
 
+#ifdef LH_IN_ENCLAVE
+void lh_print_stats(void* h) {
+  /* void */
+}
+#else
 void lh_print_stats(FILE* h) {
   static const char* line = "--------------------------------------------------------------\n";
   #ifdef _STATS
@@ -531,7 +585,13 @@ void lh_print_stats(FILE* h) {
   fputs(line, h);
   #endif
 }
+#endif
 
+#ifdef LH_IN_ENCLAVE
+void lh_check_memory(void* h) {
+  /* void */
+}
+#else
 // Check if all continuations were released. If not, print out statistics.
 void lh_check_memory(FILE* h) {
   #ifdef _STATS
@@ -541,6 +601,7 @@ void lh_check_memory(FILE* h) {
   }
   #endif
 }
+#endif
 
 /*-----------------------------------------------------------------
   Cstack
@@ -1019,9 +1080,8 @@ static handler* hstack_append_copyfrom(ref hstack* hs, ref hstack* tocopy, handl
   return bot;
 }
 
-
 // Find an operation that handles `optag` in the handler stack.
-static effecthandler* hstack_find(ref hstack* hs, lh_optag optag, out const lh_operation** op, out lh_value* local, out count* skipped) {
+static effecthandler* hstack_find(ref hstack* hs, lh_optag optag, out const lh_operation** op, out count* skipped) {
   if (!hstack_empty(hs)) {
     handler* h = hstack_top(hs);
     do {
@@ -1031,10 +1091,10 @@ static effecthandler* hstack_find(ref hstack* hs, lh_optag optag, out const lh_o
         assert(eh->hdef != NULL);
         const lh_operation* oper = &eh->hdef->operations[optag->opidx];
         assert(oper->optag == optag); // can fail if operations are defined in a different order than declared
-        if (oper->opfun != NULL) {
+        assert(oper->opfun != NULL || oper->opkind == LH_OP_FORWARD);
+        if (oper->opfun != NULL) {    // NULL functions are assume tail-resumptive identity functions, skip it
           *skipped = hstack_indexof(hs, h); assert(*skipped > 0);
           *op = oper;
-          *local = eh->local;
           return eh;
         }
       }
@@ -1047,7 +1107,6 @@ static effecthandler* hstack_find(ref hstack* hs, lh_optag optag, out const lh_o
   fatal(ENOSYS, "no handler for operation found: '%s'", lh_optag_name(optag));
   *skipped = 0;
   *op = NULL;
-  *local = lh_value_null;
   return NULL;
 }
 
@@ -1203,21 +1262,25 @@ static __noinline void lh_done(hstack* hs) {
 }
 
 #ifdef __cplusplus
-class _raii_init {
-public:
+class _raii_hstack_init {
+private:
   bool init;
   hstack* hs;
-
-  _raii_init(hstack* _hs) {
+public:
+  _raii_hstack_init(hstack* _hs) {
     hs = _hs;
     init = lh_init(hs);
   }
-  ~_raii_init() {
+  ~_raii_hstack_init() {
     if (init) lh_done(hs);
   }
+  
+  hstack* get_hstack() {
+    return hs;
+  }
 };
-#define LH_INIT(hs)   { _raii_init __init(hs); 
-#define LH_DONE(hs)     assert(__init.hs == hs); }
+#define LH_INIT(hs)   { _raii_hstack_init __init(hs); 
+#define LH_DONE(hs)     assert(__init.get_hstack() == hs); }
 #else
 #define LH_INIT(hs)   { bool __init = lh_init(hs);
 #define LH_DONE(hs)   if (__init) lh_done(hs); }
@@ -1235,12 +1298,13 @@ public:
 // variables will remain in-tact. The `no_opt` parameter is there so 
 // smart compilers (i.e. clang) will not optimize away the `alloca` in `jumpto`.
 static __noinline __noreturn void _jumpto_stack(
-  const cstack cs, lh_jmp_buf* entry, bool freecframes, struct exn_frame* exnframe, byte* no_opt )
+  byte* cframes, ptrdiff_t size, byte* base,
+  lh_jmp_buf* entry, bool freecframes, struct exn_frame* exnframe, byte* no_opt )
 {
   if (no_opt != NULL) no_opt[0] = 0;
   // copy the saved stack onto our stack
-  memcpy((void*)cs.base, cs.frames, cs.size);           // this will not overwrite our stack frame 
-  if (freecframes) { free(cs.frames); }  // should be fine to call `free` (assuming it will not mess with the stack above its frame)
+  memcpy(base, cframes, size);         // this will not overwrite our stack frame 
+  if (freecframes) { free(cframes); }  // should be fine to call `free` (assuming it will not mess with the stack above its frame)
   // and jump 
   // _lh_longjmp_chain(*entry, cstack_bottom(&cs), exnframe);
   if (exnframe != NULL) {
@@ -1281,7 +1345,8 @@ static __noinline __noreturn void jumpto(
     // since we allocated more, the execution of `_jumpto_stack` will be in a stack frame 
     // that will not get overwritten itself when copying the new stack
     // void* exnframe = (resuming ? _lh_get_exn_frame(cstack_bottom(cs)) : NULL);
-    _jumpto_stack(*cs, entry, freecframes, exnframe, no_opt);
+    _jumpto_stack(cs->frames, cs->size, (byte*)cstack_base(cs),
+                  entry, freecframes, exnframe, no_opt);
   }
 }
 
@@ -1362,29 +1427,6 @@ static void capture_hstack(hstack* hs, hstack* to, effecthandler* h, bool copy) 
 
 
 #ifdef __cplusplus
-// in some cases (like LH_OP_NORESUME) we need to unwind to the effect handler operation
-// while calling destructors. We do this using a special unwind exception.
-class lh_unwind_exception : public std::exception {
-public:
-  const effecthandler*  handler;
-  lh_opfun*             opfun;
-  lh_value              res;
-  
-  lh_unwind_exception(const effecthandler* h, lh_opfun* o, lh_value r) : handler(h), opfun(o), res(r) {  }
-  lh_unwind_exception(const lh_unwind_exception& e) : handler(e.handler), opfun(e.opfun), res(e.res) {  }
-  
-  lh_unwind_exception& operator=(const lh_unwind_exception& e) {
-    handler = e.handler;
-    opfun = e.opfun;
-    res = e.res;
-    return *this;
-  }
-  
-  virtual const char* what() const throw() {
-    return "libhandler: unwinding the stack; do not catch this exception!";
-  }
-};
-
 // Return to a handler by unwinding the handler stack and invoking any destructors.
 static void __noinline __noreturn yield_to_handler_unwind(effecthandler* h, const lh_operation* op, lh_value oparg)  {
   throw lh_unwind_exception(h, op->opfun, oparg);
@@ -1584,7 +1626,7 @@ static __noinline lh_value handle_with(
     resume*   resume = h->arg_resume;
     const lh_operation* op = h->arg_op;
     assert(op == NULL || op->optag->effect == h->handler.effect);
-    hstack_pop(hs, ((op==NULL) || !op_is_release(op)) ); // no release if moved into resumption
+    hstack_pop(hs, (op==NULL) /*|| !op_is_release(op)*/ ); // no release if moved into resumption
     if (op != NULL && op->opfun != NULL) {
       // push a scoped frame if necessary
       if (op->opkind >= LH_OP_SCOPED) {
@@ -1615,10 +1657,11 @@ static __noinline lh_value handle_with(
     lh_resultfun* resfun = NULL;
     lh_value local = lh_value_null;
     #ifdef __cplusplus
-      try { 
-        raii_hstack_pop do_pop(hs, true, h->hdef->effect);
-    #endif
-        res = action(arg); 
+    {
+      raii_hstack_pop do_pop(hs, true, h->hdef->effect);
+      try {
+        #endif
+        res = action(arg);
         assert(hs == &__hstack);
         h = (effecthandler*)hstack_top(hs);  // re-load our handler since the handler stack could have been reallocated
         #ifndef NDEBUG
@@ -1628,18 +1671,19 @@ static __noinline lh_value handle_with(
         #endif
         // pop our handler
         resfun = h->hdef->resultfun;
-        local  = h->local;
-    #ifndef __cplusplus
+        local = h->local;
+        #ifndef __cplusplus
         hstack_pop(hs, true);
-    #else
+        #else
       }
-      catch (const lh_unwind_exception& exn) { 
-        if (exn.handler==NULL || exn.handler->id != id) throw; // rethrow to other handler
+      catch (const lh_unwind_exception& exn) {
+        if (exn.handler == NULL || exn.handler->id != id) throw; // rethrow to other handler
         res = exn.res;
         if (exn.opfun != NULL) {
           res = exn.opfun(NULL, exn.handler->local, res); // LH_OP_NORESUME
         }
       }
+    }
     #endif
     if (resfun != NULL) {
       res = resfun(local, res);
@@ -1682,7 +1726,7 @@ static __noinline lh_value handle_upto(hstack* hs, void* base, const lh_handlerd
 
 
 // `handle` installs a new handler on the stack and calls the given `action` with argument `arg`.
-lh_value lh_handle( const lh_handlerdef* def, lh_value local, lh_actionfun* action, lh_value arg)
+__noinline lh_value lh_handle( const lh_handlerdef* def, lh_value local, lh_actionfun* action, lh_value arg)
 {
   void* base = NULL; // get_stack_top(); 
   hstack* hs = &__hstack;
@@ -1695,19 +1739,74 @@ lh_value lh_handle( const lh_handlerdef* def, lh_value local, lh_actionfun* acti
 
 
 /*-----------------------------------------------------------------
+  Linear handlers only have tail resume operations that do not exit themselves.
+  In that case we never have to capture a first-class resumption
+  and we can make them more convenient with block structured 
+  macros.
+-----------------------------------------------------------------*/
+
+#ifdef __cplusplus
+lh_raii_linear_handler::lh_raii_linear_handler(const lh_handlerdef* hdef, lh_value local, bool do_release) {
+  hstack* hs = &__hstack;
+  this->hs = hs;
+  this->do_release = do_release;
+  this->init = lh_init(hs);
+  effecthandler* h = hstack_push_effect(hs, hdef, NULL /*no base*/, local);
+  this->id = h->id;
+}
+lh_raii_linear_handler::~lh_raii_linear_handler() {
+  hstack* hs = (hstack*)this->hs;
+#ifndef NDEBUG
+  const handler* top = hstack_top(hs);
+  assert(is_effecthandler(top));
+  assert(((effecthandler*)top)->id == this->id);
+#endif
+  hstack_pop(hs, do_release); 
+  if (this->init) lh_done(hs);
+}
+
+#else
+ptrdiff_t _lh_linear_handler_init(const lh_handlerdef* hdef, lh_value local, bool* init) {
+  hstack* hs = &__hstack;
+  bool _init = lh_init(hs); if (init != NULL) *init = _init;
+  effecthandler* h = hstack_push_effect(hs, hdef, NULL /*no base*/, local);
+  return h->id;
+}
+
+void _lh_linear_handler_done(ptrdiff_t id, bool init, bool do_release) {
+  hstack* hs = &__hstack;
+#ifndef NDEBUG
+  handler* top = hstack_top(hs);
+  assert(is_effecthandler(top));
+  assert(((effecthandler*)top)->id==id);
+#endif
+  hstack_pop(hs, do_release); 
+  if (init) lh_done(hs);
+}
+#endif
+
+// Effect declaration for defer (defined as macros in libhandler.h)
+LH_DEFINE_EFFECT0(defer)
+
+// Default operation declaration for implicit parameters (define in libhandler.h)
+// Just a default definition, as the actual implementation uses `lh_yield_local`.
+lh_value _lh_implicit_get(lh_resume r, lh_value local, lh_value arg) {  
+  return lh_tail_resume(r, local, local);
+}
+
+/*-----------------------------------------------------------------
   Yield an operation
 -----------------------------------------------------------------*/
 
 // `yieldop` yields to the first enclosing handler that can handle
 //   operation `optag` and passes it the argument `arg`.
-static lh_value __noinline yieldop(lh_optag optag, lh_value arg)
+static lh_value yieldop(lh_optag optag, lh_value arg)
 {
   // find the operation handler along the handler stack
   hstack*   hs = &__hstack;
   count     skipped;
-  lh_value  local;
   const lh_operation* op;
-  effecthandler* h = hstack_find(hs, optag, &op, &local, &skipped);
+  effecthandler* h = hstack_find(hs, optag, &op, &skipped);
 
   // No resume (i.e. like `throw`)
   if (op->opkind <= LH_OP_NORESUME) {
@@ -1724,7 +1823,7 @@ static lh_value __noinline yieldop(lh_optag optag, lh_value arg)
     // setup up a stack allocated tail resumption
     tailresume r;
     r.lhresume.rkind = TailResume;
-    r.local = local;
+    r.local = h->local;
     r.resumed = false;
     assert((void*)(&r.lhresume) == (void*)&r);
     lh_value res;
@@ -1733,10 +1832,10 @@ static lh_value __noinline yieldop(lh_optag optag, lh_value arg)
       hstack_push_skip(hs, skipped);
       count hidx = hstack_indexof(hs, to_handler(h));
       #ifdef __cplusplus
-      raii_hstack_pop do_pop(hs, true, LH_EFFECT(__skip));
+      raii_hstack_pop do_pop(hs, false /* skip frames need no release */, LH_EFFECT(__skip));
       #endif
       // call the operation handler directly for a tail resumption
-      res = op->opfun(&r.lhresume, local, arg);
+      res = op->opfun(&r.lhresume, h->local, arg);
       h = (effecthandler*)hstack_at(hs, hidx);
       assert(is_effecthandler(to_handler(h)));
       #ifndef __cplusplus
@@ -1748,7 +1847,7 @@ static lh_value __noinline yieldop(lh_optag optag, lh_value arg)
     // OP_TAIL_NOOP: will not call operations so no need for a skip frame
     // call the operation function and return directly (as it promised to tail resume)
     else {
-      res = op->opfun(&r.lhresume, local, arg);
+      res = op->opfun(&r.lhresume, h->local, arg);
     }
     
     // if we returned from a `lh_tail_resume` we just return its result
@@ -1785,6 +1884,25 @@ lh_value lh_yield(lh_optag optag, lh_value arg) {
 }
 
 
+/*-----------------------------------------------------------------
+  Get the local state of a handler
+-----------------------------------------------------------------*/
+
+// `lh_yield_local` yields to the first enclosing handler for
+// operation `optag` and returns its local state. This should be used
+// with care as it violates the encapsulation principle but works
+// well for implicit parameters and to reduce the number of explicit
+// operations for many effects.
+lh_value lh_yield_local(lh_optag optag)
+{
+  // find the operation handler along the handler stack
+  hstack*   hs = &__hstack;
+  count     skipped;
+  const lh_operation* op;
+  effecthandler* h = hstack_find(hs, optag, &op, &skipped);
+  // and return the local state
+  return h->local;
+}
 
 /*-----------------------------------------------------------------
   Passing multiple arguments
@@ -1837,7 +1955,7 @@ static resume* to_resume(lh_resume r) {
   return (resume*)r;
 }
 
-static lh_value lh_release_resume_(resume* r, lh_value local, lh_value resarg) {
+static __noinline lh_value lh_release_resume_(resume* r, lh_value local, lh_value resarg) {
   hstack* hs = &__hstack;
   lh_value res;
   LH_INIT(hs)
@@ -1847,7 +1965,7 @@ static lh_value lh_release_resume_(resume* r, lh_value local, lh_value resarg) {
 }
 
 
-lh_value lh_call_resume(lh_resume r, lh_value local, lh_value res) {
+lh_value __noinline lh_call_resume(lh_resume r, lh_value local, lh_value res) {
   return lh_release_resume_(resume_acquire(to_resume(r)), local, res);
 }
 
@@ -1855,7 +1973,7 @@ lh_value lh_scoped_resume(lh_resume r, lh_value local, lh_value res) {
   return lh_call_resume(r, local, res);
 }
 
-lh_value lh_release_resume(lh_resume r, lh_value local, lh_value res) {
+__noinline lh_value lh_release_resume(lh_resume r, lh_value local, lh_value res) {
   if (r->rkind == ScopedResume) {
     return lh_scoped_resume(r, local, res);
   }
@@ -1897,7 +2015,22 @@ static void _lh_release(resume* r) {
   resume_release(r);
 }
 
-void lh_release(lh_resume r) {
+void __noinline lh_release(lh_resume r) {
   if (r->rkind != TailResume) _lh_release(to_resume(r));
 }
 
+void lh_nothing() { }
+
+// Convert function pointers to lh_values's; 
+// ISO C doesn't allow casting from pointers to function pointers 
+// but we assume it is ok to do this for our target platforms.
+lh_value lh_value_from_fun_ptr(lh_voidfun* fun) {
+  void** pfun = (void**)&fun;
+  return lh_value_ptr(*pfun);
+}
+
+lh_voidfun* lh_fun_ptr_value(lh_value v) {
+  void* p = lh_ptr_value(v);
+  lh_voidfun** pfun = (lh_voidfun**)&p;
+  return *pfun; 
+}
